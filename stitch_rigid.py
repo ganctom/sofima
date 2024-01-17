@@ -22,21 +22,30 @@ by the estimated offset. This system is relaxed to establish an initial position
 for every tile based on cross-correlation between tile overlaps.
 """
 
+from pathlib import Path
 from typing import Mapping, Optional
 
 import jax.numpy as jnp
 import numpy as np
+import skimage.io
 from scipy import ndimage
 
 from sofima import flow_field
 from sofima import mesh
+from sofima import flow_utils
+
+TileXY = tuple[int, int]
+TileMap = Mapping[TileXY, np.ndarray]
+TileMask = Mapping[TileXY, Optional[np.ndarray]]
 
 
 def _estimate_offset(
-    a: np.ndarray, b: np.ndarray, range_limit: float, filter_size: int = 10
+    a: np.ndarray, b: np.ndarray, range_limit: float, filter_size: int = 10,
+    mask: Optional[np.ndarray] = None,
 ) -> tuple[list[float], float]:
   """Estimates the global offset vector between images 'a' and 'b'."""
   # Mask areas with insufficient dynamic range.
+
   a_mask = (
       ndimage.maximum_filter(a, filter_size)
       - ndimage.minimum_filter(a, filter_size)
@@ -45,6 +54,22 @@ def _estimate_offset(
       ndimage.maximum_filter(b, filter_size)
       - ndimage.minimum_filter(b, filter_size)
   ) < range_limit
+
+  # Customize the mask if necessary
+  # smr_extent = 40
+  # b_mask[:smr_extent, :] = True
+  # smr_yx = (120, 500)
+  # b_mask[:smr_yx[0], smr_yx[1]:] = True
+  b_mask |= mask
+
+  # # Store mask for inspection
+  # out_dir = r"c:\Users\ganctoma\OneDrive - Friedrich Miescher Institute for Biomedical Research\Code\tools\EM_ALIGNMENT\dev\Smearing_masking\to_process\align_run_1_3_s1522_t866_t906_simple_smearing_mask_does_not_work"
+  # out_fn = "mask_b_custom" + str(range_limit) + ".tif"
+  # fp_out = Path(out_dir) / out_fn
+  # print(f'storing mask: {fp_out}')
+  # skimage.io.imsave(fp_out, b_mask)
+
+  # Compute coarse-shift vector
   mfc = flow_field.JAXMaskedXCorrWithStatsCalculator()
   xo, yo, _, pr = mfc.flow_field(
       a, b, pre_mask=a_mask, post_mask=b_mask, patch_size=a.shape, step=(1, 1)
@@ -58,6 +83,7 @@ def _estimate_offset_horiz(
     right: np.ndarray,
     range_limit: float,
     filter_size: int,
+    mask: np.ndarray,
 ) -> tuple[list[float], float]:
   return _estimate_offset(
       left[:, -overlap:], right[:, :overlap], range_limit, filter_size
@@ -70,25 +96,27 @@ def _estimate_offset_vert(
     bot: np.ndarray,
     range_limit: float,
     filter_size: int,
+    mask: np.ndarray,
 ) -> tuple[list[float], float]:
   return _estimate_offset(
       top[-overlap:, :], bot[:overlap, :], range_limit, filter_size
   )
 
-
 def compute_coarse_offsets(
-    yx_shape: tuple[int, int],
-    tile_map: Mapping[tuple[int, int], np.ndarray],
+    yx_shape: TileXY,
+    tile_map: TileMap,
+    mask_map: TileMask,
     overlaps_xy=((200, 300), (200, 300)),
     min_range=(10, 100, 0),
     min_overlap=160,
     filter_size=10,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, TileMask]:
   """Computes a coarse offset between every neighboring tile pair.
 
   Args:
     yx_shape: vertical and horizontal number of tiles
     tile_map: maps (x, y) tile coordinate to the tile image
+    mask_map: maps (x, y) tile coordinate to custom binary mask of tile image
     overlaps_xy: pair of two overlap sequences to try, for NN tiles in the X and
       Y direction, respectively; these overlaps define the number of pixels in
       the given dimension used to compute the offset vector
@@ -118,7 +146,7 @@ def compute_coarse_offsets(
     tiles are set to nan.
   """
 
-  def _find_offset(estimate_fn, pre, post, overlaps, max_ortho_shift, axis):
+  def _find_offset(estimate_fn, pre, post, overlaps, max_ortho_shift, axis, mask):
     def _is_valid_offset(offset, axis):
       return (
           abs(offset[1 - axis]) < max_ortho_shift
@@ -134,7 +162,8 @@ def compute_coarse_offsets(
       max_pr = 0
       estimates = []
       for overlap in overlaps:
-        offset, pr = estimate_fn(overlap, pre, post, range_limit, filter_size)
+        print(f"ov_size, range_limit: {overlap}, {range_limit}")
+        offset, pr = estimate_fn(overlap, pre, post, range_limit, filter_size, mask)
         offset[axis] -= overlap
 
         # If a single peak is found, terminate search.
@@ -176,6 +205,8 @@ def compute_coarse_offsets(
     return offset
 
   conn_x = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
+  mask_map_new = mask_map.copy()
+
   for x in range(0, yx_shape[1] - 1):
     for y in range(0, yx_shape[0]):
       if not ((x, y) in tile_map and (x + 1, y) in tile_map):
@@ -183,6 +214,7 @@ def compute_coarse_offsets(
 
       left = tile_map[(x, y)]
       right = tile_map[(x + 1, y)]
+      mask_x = None  # TODO implement usage of vertical mask
       conn_x[:, 0, y, x] = _find_offset(
           _estimate_offset_horiz,
           left,
@@ -190,6 +222,7 @@ def compute_coarse_offsets(
           overlaps_xy[0],
           max(overlaps_xy[1]),
           0,
+          mask_x,
       )
 
   conn_y = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
@@ -200,6 +233,11 @@ def compute_coarse_offsets(
 
       top = tile_map[(x, y)]
       bot = tile_map[(x, y + 1)]
+      print(f'processing tile {x, y}')
+      if mask_map[(x, y + 1)] is None:
+        mask_y = flow_utils.get_smearing_mask(bot)
+        mask_map_new[(x, y + 1)] = mask_y
+
       conn_y[:, 0, y, x] = _find_offset(
           _estimate_offset_vert,
           top,
@@ -207,9 +245,10 @@ def compute_coarse_offsets(
           overlaps_xy[1],
           max(overlaps_xy[0]),
           1,
+          mask_y,
       )
 
-  return conn_x, conn_y
+  return conn_x, conn_y, mask_map_new
 
 
 # TODO(mjanusz): add type aliases for ndarrays

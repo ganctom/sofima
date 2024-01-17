@@ -410,7 +410,7 @@ class JAXMaskedXCorrWithStatsCalculator:
                  post_mask=None,
                  mask_only_for_patch_selection=False,
                  selection_mask=None,
-                 max_masked=0.75,
+                 max_masked=0.95,
                  batch_size=4096,
                  post_patch_size: Optional[Union[int, Sequence[int]]] = None):
     """Computes the flow field from post to pre.
