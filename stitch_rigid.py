@@ -54,7 +54,7 @@ def _estimate_offset(
       ndimage.maximum_filter(b, filter_size)
       - ndimage.minimum_filter(b, filter_size)
   ) < range_limit
-  
+
   if mask.size != 0:
     b_mask |= mask
 
@@ -100,6 +100,7 @@ def compute_coarse_offsets(
     min_overlap=160,
     filter_size=10,
     mask_top_edge=4,
+    max_valid_offset=400
 ) -> tuple[np.ndarray, np.ndarray, MaskMap]:
   """Computes a coarse offset between every neighboring tile pair.
 
@@ -118,6 +119,7 @@ def compute_coarse_offsets(
       valid
     filter_size: size of the filter to use when evaluating dynamic range
     mask_top_edge: default number of lines to be masked (from top of the image)
+    max_valid_offset: limit valid range of coarse offsets to +- max_valid_offset
 
   Returns:
     two arrays of shape [2, 1] + yx_shape, where the dimensions are:
@@ -140,8 +142,8 @@ def compute_coarse_offsets(
   def _find_offset(estimate_fn, pre, post, overlaps, max_ortho_shift, axis, mask):
     def _is_valid_offset(offset, axis):
       return (
-          abs(offset[1 - axis]) < max_ortho_shift
-          and abs(offset[axis]) >= min_overlap
+        abs(offset[1 - axis]) < max_ortho_shift
+        and min_overlap <= abs(offset[axis]) < max_valid_offset
       )
 
     done = False
