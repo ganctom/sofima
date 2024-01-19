@@ -42,7 +42,7 @@ MaskMap = dict[TileXY, np.ndarray]
 def _estimate_offset(
     a: np.ndarray, b: np.ndarray, range_limit: float, mask: np.ndarray,
     filter_size: int = 10,
-) -> tuple[list[float], float]:
+) -> tuple[list[float], float, np.ndarray[bool]]:
   """Estimates the global offset vector between images 'a' and 'b'."""
   # Mask areas with insufficient dynamic range.
 
@@ -54,7 +54,7 @@ def _estimate_offset(
       ndimage.maximum_filter(b, filter_size)
       - ndimage.minimum_filter(b, filter_size)
   ) < range_limit
-
+  
   if mask.size != 0:
     b_mask |= mask
 
@@ -63,7 +63,7 @@ def _estimate_offset(
   xo, yo, _, pr = mfc.flow_field(
       a, b, pre_mask=a_mask, post_mask=b_mask, patch_size=a.shape, step=(1, 1)
   ).squeeze()
-  return [xo, yo], abs(pr)
+  return [xo, yo], abs(pr), b_mask
 
 
 def _estimate_offset_horiz(
@@ -73,7 +73,7 @@ def _estimate_offset_horiz(
     range_limit: float,
     filter_size: int,
     mask: np.ndarray,
-) -> tuple[list[float], float]:
+) -> tuple[list[float], float, np.ndarray[bool]]:
   return _estimate_offset(
       left[:, -overlap:], right[:, :overlap], range_limit, mask, filter_size,
   )
@@ -86,7 +86,7 @@ def _estimate_offset_vert(
     range_limit: float,
     filter_size: int,
     mask: np.ndarray,
-) -> tuple[list[float], float]:
+) -> tuple[list[float], float, np.ndarray[bool]]:
   return _estimate_offset(
       top[-overlap:, :], bot[:overlap, :], range_limit, mask, filter_size,
   )
@@ -99,6 +99,7 @@ def compute_coarse_offsets(
     min_range=(10, 100, 0),
     min_overlap=160,
     filter_size=10,
+    mask_top_edge=4,
 ) -> tuple[np.ndarray, np.ndarray, MaskMap]:
   """Computes a coarse offset between every neighboring tile pair.
 
@@ -116,6 +117,7 @@ def compute_coarse_offsets(
     min_overlap: minimum overlap required for the estimate to be considered
       valid
     filter_size: size of the filter to use when evaluating dynamic range
+    mask_top_edge: default number of lines to be masked (from top of the image)
 
   Returns:
     two arrays of shape [2, 1] + yx_shape, where the dimensions are:
@@ -144,17 +146,19 @@ def compute_coarse_offsets(
 
     done = False
 
+    mask_fin = mask
     for range_limit in min_range:
       if done:
         break
       max_idx = -1
       max_pr = 0
       estimates = []
+
       for overlap in overlaps:
         print(f"ov_size, range_limit: {overlap}, {range_limit}")
         mask_ov = mask[:overlap]
-        offset, pr = estimate_fn(overlap, pre, post, range_limit, filter_size,
-                                 mask_ov)
+        offset, pr, mask_fin = estimate_fn(overlap, pre, post, range_limit,
+                                           filter_size, mask_ov)
         offset[axis] -= overlap
 
         # If a single peak is found, terminate search.
@@ -193,10 +197,9 @@ def compute_coarse_offsets(
     if not done or abs(offset[axis]) < min_overlap:
       offset = np.inf, np.inf
 
-    return offset
+    return offset, mask_fin
 
   conn_x = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
-
 
   for x in range(0, yx_shape[1] - 1):
     for y in range(0, yx_shape[0]):
@@ -206,7 +209,7 @@ def compute_coarse_offsets(
       left = tile_map[(x, y)]
       right = tile_map[(x + 1, y)]
       mask_x = np.empty((0,))  # TODO implement usage of vertical mask
-      conn_x[:, 0, y, x] = _find_offset(
+      conn_x[:, 0, y, x], _ = _find_offset(
           _estimate_offset_horiz,
           left,
           right,
@@ -217,7 +220,6 @@ def compute_coarse_offsets(
       )
 
   conn_y = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
-  print('conny')
   for y in range(0, yx_shape[0] - 1):
     for x in range(0, yx_shape[1]):
       if not ((x, y) in tile_map and (x, y + 1) in tile_map):
@@ -228,14 +230,14 @@ def compute_coarse_offsets(
       bot = tile_map[(x, y + 1)]
       mask_y = mask_map[(x, y + 1)]
 
-      # Compute custom smearing mask
-      print(mask_y.size)
-      if mask_y.size == 0:
+      # Compute custom smearing mask if not defined or loaded old mask shape
+      # would not match all shapes of min_range masks (_estimate_offset)
+      if mask_y.size == 0 or np.shape(mask_y)[0] < max(overlaps_xy[0]):
         bot_crop = bot[:max(overlaps_xy[1])]
-        mask_y = flow_utils.get_smearing_mask(bot_crop, smr_ext=4)
+        mask_y = flow_utils.get_smearing_mask(bot_crop, mask_top_edge)
         mask_map[(x, y + 1)] = mask_y
 
-      conn_y[:, 0, y, x] = _find_offset(
+      conn_y[:, 0, y, x], mask_yy = _find_offset(
           _estimate_offset_vert,
           top,
           bot,
@@ -244,6 +246,9 @@ def compute_coarse_offsets(
           1,
           mask_y,
       )
+
+      # Save final version of binary mask used in _estimate_offset
+      mask_map[(x, y + 1)] = mask_yy
 
   return conn_x, conn_y, mask_map
 
