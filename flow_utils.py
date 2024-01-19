@@ -290,8 +290,11 @@ def interpolate_nan_2d(arr, min_interp_pts=10):
 
 
 def get_smearing_mask(
-  img: np.ndarray, path_plot: Optional[str] = None,
-  plot=False) -> Optional[np.ndarray]:
+  img: np.ndarray,
+  smr_ext: int = 4,
+  path_plot: Optional[str] = None,
+  plot=False
+) -> Optional[np.ndarray]:
 
   kwargs = dict(
     img=img,
@@ -311,6 +314,9 @@ def get_smearing_mask(
   # mask_final = set_lines_above_to_true_recursive(mask_filled)
   # mask_final = set_lines_above_to_true_recursive(mask_flooded)
   mask_final = mask_filled
+
+  if smr_ext > 0:
+    mask_final[:smr_ext] = True
 
   if plot:
     to_plot = [smr_map, smr_map_interp, mask_smr, mask_filled, mask_flooded,
