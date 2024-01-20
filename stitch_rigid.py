@@ -21,7 +21,7 @@ with a Hookean spring to each NN, with the rest spring length determined
 by the estimated offset. This system is relaxed to establish an initial position
 for every tile based on cross-correlation between tile overlaps.
 """
-
+import time
 from pathlib import Path
 from typing import Mapping, Optional
 

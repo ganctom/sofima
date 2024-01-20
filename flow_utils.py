@@ -22,7 +22,7 @@ with them. When present, these are stored in channels 2+ of the array.
 Flow entries can be invalid (i.e., unknown for a given point), in which
 case they are marked by nan stored in both X and Y channels.
 """
-
+import time
 from typing import Sequence, List, Optional
 
 import numpy as np
@@ -35,6 +35,8 @@ from skimage.io import imread, imsave
 from skimage.filters import gaussian
 from scipy import signal
 from scipy.ndimage import binary_fill_holes
+from scipy.ndimage import gaussian_filter
+import cv2
 
 
 def apply_mask(flow, mask):
@@ -171,25 +173,24 @@ def detect_smearing2d(
   img = gaussian(img, sigma=sigma) if sigma > 1 else img.astype(float)
 
   # Pad the entire image to handle borders
-  half_width = int(segment_width // 2)
-  mode = 'constant'
-  pad_width = ((0, 0), (half_width, half_width))
-  img_padded = np.pad(img, pad_width, mode)
+  hw = int(segment_width // 2)
+  pad_width = ((0, 0), (hw, hw))
+  img_padded = np.pad(img, pad_width, mode='constant')
 
-  # Iterate over the line segments
-  for i in range(np.shape(img)[0] - dy):
-    for j in range(0, np.shape(img)[1], dx):
-      # Perform cross-correlation between neighboring line sections
-      sec_a = img_padded[i, j:j + segment_width]
-      sec_b = img_padded[i + dy, j:j + segment_width]
+  h, w = np.shape(img)
+  for y in range(h - dy):
+    for x in range(0, w, dx):
+
+      sec_a = img_padded[y, x:x + segment_width]
+      sec_b = img_padded[y + dy, x:x + segment_width]
       corr = signal.correlate(sec_a, sec_b)
-      # Find the peak of the cross-correlation &
-      # Calculate the center position of the line
-      peak = np.argmax(corr)
+
+      # Find the shift from peak of cross-correlation &
+      # calculate the center position of the corr line
       center = len(sec_a)
-      # Calculate the peak shift
-      peak_shift = peak - (center - 1)
-      smearing_map[i][j] = int(peak_shift)
+      peak_shift = np.argmax(corr) - (center - 1)
+      smearing_map[y][x] = int(peak_shift)
+
   return smearing_map
 
 
@@ -289,6 +290,24 @@ def interpolate_nan_2d(arr, min_interp_pts=10):
   return interp_arr
 
 
+def flood_smearing(mask: np.ndarray, portion: float) -> np.ndarray:
+  rows, cols = mask.shape
+  win = cols // 4
+  result_array = mask.copy()
+
+  for row in range(rows):
+    window_sum = np.convolve(mask[row, :], np.ones(win), mode='valid')
+    target_sum = portion * win
+
+    condition_met = (window_sum == target_sum)
+
+    if any(condition_met):
+      start_index = np.argmax(condition_met)
+      result_array[row, start_index:] = True
+
+  return result_array
+
+
 def get_smearing_mask(
   img: np.ndarray,
   mask_top_edge: int = 0,
@@ -310,10 +329,10 @@ def get_smearing_mask(
   smr_map_interp = gaussian(smr_map_interp, sigma=2)
   mask_smr = create_mask(smr_map_interp, threshold=0.1)
   mask_filled = fill_holes(mask_smr)
-  mask_flooded = flood_pixels(mask_filled, ratio=0.7)
-  # mask_final = set_lines_above_to_true_recursive(mask_filled)
-  # mask_final = set_lines_above_to_true_recursive(mask_flooded)
-  mask_final = mask_filled
+  mask_flooded = flood_pixels(mask_filled, ratio=0.7)  # not used
+  mask_flood = flood_smearing(mask_filled, 1.0)
+  mask_rec = set_lines_above_to_true_recursive(mask_flood)
+  mask_final = mask_rec
 
   if mask_top_edge > 0:
     mask_final[:mask_top_edge] = True
