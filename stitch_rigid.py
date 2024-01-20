@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 import numpy as np
 import skimage.io
 from scipy import ndimage

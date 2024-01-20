@@ -151,18 +151,19 @@ def detect_smearing2d(
   dy: int = 3,
   sigma=1.5
 ) -> Optional[np.ndarray]:
-  """
-  Detect smearing in the image using cross-correlation between line segments.
+  """Detect smearing in the image using cross-correlation between line segments.
 
   Args:
-  - img (numpy.ndarray): The image array.
-  - segment_width (int): Length of the line segment(s) used for cross-correlation.
-  - dx (int): stride in x-axis of the image; defines the 'resolution' of the smearing map in X.
-  - dy (int): distance between lines to be correlated in vertical direction (in pixels). Must be > 1.
-  - sigma (float): Standard deviation for Gaussian blur. Do not use sigma=1.0
+    img: The image array
+    segment_width: Length of the line segment(s) used for cross-correlation
+    dx: stride in x-axis of the image; defines the 'resolution' of
+      the smearing map in X.
+    dy: distance between lines to be correlated in vertical
+      direction (in pixels). Must be > 1.
+    sigma: Standard deviation for Gaussian blur. Do not use sigma=1.0
 
   Returns:
-  - smearing_mask (numpy.ndarray): A binary mask indicating the smeared portions.
+    smearing_mask: A binary mask indicating the smeared portions.
 
   """
 
@@ -194,8 +195,12 @@ def detect_smearing2d(
   return smearing_map
 
 
-def create_mask(arr, threshold):
+def _create_mask(arr, threshold):
   return np.abs(arr) > threshold
+
+def create_mask(arr, threshold):
+  return -threshold > arr
+
 
 def fill_holes(mask):
   num_mask = np.asarray(mask, dtype=int)
@@ -226,7 +231,6 @@ def set_lines_above_recursive(mask, row):
   if row > 0 and np.all(mask[row, :]):
     mask[row - 1, :] = True
     set_lines_above_recursive(mask, row - 1)
-
 
 def set_lines_above_to_true_recursive(mask):
   result_mask = mask.copy()
@@ -272,13 +276,13 @@ def plot_smearing(plots: List[np.ndarray], path_plot: str) -> None:
 
 
 def interpolate_nan_2d(arr, min_interp_pts=10):
-  """
-  Perform linear interpolation to replace NaN values in a 2D array along each row.
-  Parameters:
-  - array_2d (numpy.ndarray): Input 2D array with NaN values.
+  """Performs lin. interpolation to replace NaN values in input array along each row.
+  Args:
+    arr: Input 2D array with NaN values
+    min_interp_pts:
+
   Returns:
-  - interpolated_array (numpy.ndarray): Output 2D array with NaN values replaced
-    by interpolated values.
+    Output 2D array with NaN values replaced by interpolated values.
   """
 
   interp_arr = arr.copy()
@@ -293,6 +297,9 @@ def interpolate_nan_2d(arr, min_interp_pts=10):
 
 
 def flood_smearing(mask: np.ndarray, portion: float) -> np.ndarray:
+  """
+
+  """
   rows, cols = mask.shape
   win = cols // 5
   result_array = mask.copy()
@@ -305,21 +312,23 @@ def flood_smearing(mask: np.ndarray, portion: float) -> np.ndarray:
 
     if any(condition_met):
       start_index = np.argmax(condition_met)
-      result_array[row, start_index:] = True
+      result_array[row, start_index:start_index+win] = True
 
   return result_array
 
 
-def remove_isolated(mask: np.ndarray[bool], min_size=200) -> np.ndarray[bool]:
-  """
+def remove_isolated(mask: np.ndarray[bool], min_size=300) -> np.ndarray[bool]:
+  """Filters small areas with True value in the 2D-binary mask
+
   Remove isolated islands of True values in binary mask by finding their
   contours and thresholding their area.
 
-  Parameters:
-  - mask: Input binary mask to be filtered.
-  - min_size: Objects smaller than this value (pixels) will be filtered
+  Args:
+    mask: Input binary mask to be filtered
+    min_size: Objects smaller than this value (pixels) will be filtered
+
   Returns:
-  - interpolated_array (numpy.ndarray):
+    Filtered binary mask array
   """
 
   mask_uint8 = mask.astype(np.uint8)
@@ -337,18 +346,27 @@ def remove_isolated(mask: np.ndarray[bool], min_size=200) -> np.ndarray[bool]:
 
   return mask_uint8 > 0
 
-def get_smearing_mask(
-  img: np.ndarray,
-  mask_top_edge: int = 0,
-  path_plot: Optional[str] = None,
-  plot=False
-) -> Optional[np.ndarray]:
 
+def get_smearing_mask(img: np.ndarray, mask_top_edge: int = 0, path_plot: Optional[str] = None, plot=False) -> Optional[np.ndarray]:
+  """Copmutes mask of a distortion appearing at the top of the EM-images.
+
+  Estimate the presence and extent of a smearing distortion at the top of the
+  input image and return it as a boolean mask.
+
+  Args:
+    img: input image for detection of distortion at its top border
+    mask_top_edge: number of lines at the top of the image to be masked entirely
+    path_plot: filepath where to save the mask image (if plot=True)
+    plot: switch to execute creation of various mask graphs
+
+  Returns:
+    Mask of smearing distortion with the shape same as the input image
+  """
   kwargs = dict(
     img=img,
     segment_width=1000,
     sigma=1.5,
-    dx=100,
+    dx=50,
     dy=4
   )
 
@@ -357,20 +375,20 @@ def get_smearing_mask(
   smr_map_interp = interpolate_nan_2d(smr_map)
   smr_map_interp = gaussian(smr_map_interp, sigma=2)
   mask_smr = create_mask(smr_map_interp, threshold=0.1)
+
+  if mask_top_edge > 0:
+    mask_smr[:mask_top_edge] = True
+
   mask_filled = fill_holes(mask_smr)
   mask_flooded = flood_pixels(mask_filled, ratio=0.7)  # not used
   mask_flood = flood_smearing(mask_filled, portion=1.0)
-  mask_flood = flood_smearing(mask_flood, portion=.5)
-  mask_rec = set_lines_above_to_true_recursive(mask_flood)
-  mask_final = fill_holes(mask_rec)
-  mask_final = remove_isolated(mask_final)
-
-  if mask_top_edge > 0:
-    mask_final[:mask_top_edge] = True
+  mask_flood2 = flood_smearing(mask_flood, portion=.5)
+  mask_final = fill_holes(mask_flood2)
+  mask_final2 = remove_isolated(mask_final, min_size=800)
 
   if plot:
-    to_plot = [smr_map, smr_map_interp, mask_smr, mask_filled, mask_flooded,
-               mask_final]
+    to_plot = [smr_map, smr_map_interp, mask_flood, mask_flood2, mask_final,
+               mask_final2]
     plot_smearing(plots=to_plot, path_plot=path_plot)
 
-  return mask_final
+  return mask_final2
