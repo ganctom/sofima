@@ -202,6 +202,7 @@ def fill_holes(mask):
   fill_mask = binary_fill_holes(num_mask).astype(bool)
   return fill_mask
 
+
 def blur_mask(mask, sigma: float = 1.5):
   mask = np.asarray(mask, dtype=bool)
   blurred_mask = gaussian(mask.astype(float), sigma=sigma)
@@ -276,7 +277,8 @@ def interpolate_nan_2d(arr, min_interp_pts=10):
   Parameters:
   - array_2d (numpy.ndarray): Input 2D array with NaN values.
   Returns:
-  - interpolated_array (numpy.ndarray): Output 2D array with NaN values replaced by interpolated values.
+  - interpolated_array (numpy.ndarray): Output 2D array with NaN values replaced
+    by interpolated values.
   """
 
   interp_arr = arr.copy()
@@ -292,7 +294,7 @@ def interpolate_nan_2d(arr, min_interp_pts=10):
 
 def flood_smearing(mask: np.ndarray, portion: float) -> np.ndarray:
   rows, cols = mask.shape
-  win = cols // 4
+  win = cols // 5
   result_array = mask.copy()
 
   for row in range(rows):
@@ -308,6 +310,33 @@ def flood_smearing(mask: np.ndarray, portion: float) -> np.ndarray:
   return result_array
 
 
+def remove_isolated(mask: np.ndarray[bool], min_size=200) -> np.ndarray[bool]:
+  """
+  Remove isolated islands of True values in binary mask by finding their
+  contours and thresholding their area.
+
+  Parameters:
+  - mask: Input binary mask to be filtered.
+  - min_size: Objects smaller than this value (pixels) will be filtered
+  Returns:
+  - interpolated_array (numpy.ndarray):
+  """
+
+  mask_uint8 = mask.astype(np.uint8)
+  contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL,
+                                    cv2.CHAIN_APPROX_SIMPLE)
+
+  for c in contours:
+    if cv2.contourArea(c) < min_size:
+      kwargs = {'contours': [c],
+                'contourIdx': -1,
+                'color': 0,
+                'thickness': cv2.FILLED
+                }
+      cv2.drawContours(mask_uint8, **kwargs)
+
+  return mask_uint8 > 0
+
 def get_smearing_mask(
   img: np.ndarray,
   mask_top_edge: int = 0,
@@ -319,8 +348,8 @@ def get_smearing_mask(
     img=img,
     segment_width=1000,
     sigma=1.5,
-    dx=10,
-    dy=3
+    dx=100,
+    dy=4
   )
 
   # Apply the smearing detection
@@ -330,9 +359,11 @@ def get_smearing_mask(
   mask_smr = create_mask(smr_map_interp, threshold=0.1)
   mask_filled = fill_holes(mask_smr)
   mask_flooded = flood_pixels(mask_filled, ratio=0.7)  # not used
-  mask_flood = flood_smearing(mask_filled, 1.0)
+  mask_flood = flood_smearing(mask_filled, portion=1.0)
+  mask_flood = flood_smearing(mask_flood, portion=.5)
   mask_rec = set_lines_above_to_true_recursive(mask_flood)
-  mask_final = mask_rec
+  mask_final = fill_holes(mask_rec)
+  mask_final = remove_isolated(mask_final)
 
   if mask_top_edge > 0:
     mask_final[:mask_top_edge] = True
