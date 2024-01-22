@@ -56,6 +56,12 @@ def _estimate_offset(
       - ndimage.minimum_filter(b, filter_size)
   ) < range_limit
 
+  # c_mask = np.zeros_like(mask)
+  # c_mask[:8] = True
+  # c_mask[:20, 1000:1800] = True
+  # c_mask[:, 1800:] = True
+  # b_mask |= c_mask
+
   if mask.size != 0:
     b_mask |= mask
 
@@ -235,9 +241,18 @@ def compute_coarse_offsets(
 
       # Compute custom smearing mask if not defined or loaded old mask shape
       # would not match all shapes of min_range masks (_estimate_offset)
+
+      fn = (r"c:\Users\ganctoma\OneDrive - Friedrich Miescher Institute for Biomedical Research\Code\tools\EM_ALIGNMENT\dev\Smearing_masking\to_process\20230523_RoLi_IV_130558_run2_g0001_t0866_s01131\tmp.png"
+            )
+
       if mask_y.size == 0 or np.shape(mask_y)[0] < max(overlaps_xy[0]):
         bot_crop = bot[:max(overlaps_xy[1])]
-        mask_y = flow_utils.get_smearing_mask(bot_crop, mask_top_edge)
+        mask_y = flow_utils.get_smearing_mask(
+          bot_crop,
+          mask_top_edge,
+          path_plot=fn,
+          plot=False
+        )
         mask_map[(x, y + 1)] = mask_y
 
       conn_y[:, 0, y, x], mask_yy = _find_offset(

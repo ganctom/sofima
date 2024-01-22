@@ -23,7 +23,7 @@ Flow entries can be invalid (i.e., unknown for a given point), in which
 case they are marked by nan stored in both X and Y channels.
 """
 import time
-from typing import Sequence, List, Optional
+from typing import Sequence, List, Optional, Tuple, Union
 
 import numpy as np
 from scipy import ndimage
@@ -195,6 +195,41 @@ def detect_smearing2d(
   return smearing_map
 
 
+def plot_smearing(plots: List[np.ndarray], path_plot: str) -> None:
+  fig = plt.figure(figsize=(15, 8))
+  gs = gridspec.GridSpec(7, 2, width_ratios=[1, 0.1])
+
+  axes = [plt.subplot(gs[i, 0]) for i in range(6)]
+  cax = plt.subplot(gs[:, 1])
+
+  im0 = axes[0].matshow(plots[0], cmap='viridis')
+  axes[0].set_title('Original cross-correlation map')
+
+  im1 = axes[1].matshow(plots[1], cmap='viridis')
+  axes[1].set_title('Interpolated cross-correlation map')
+
+  im2 = axes[2].imshow(plots[2], cmap='gray')
+  axes[2].set_title('Mask: Interpolated cross-correlation map')
+
+  im3 = axes[3].imshow(plots[3], cmap='gray')
+  axes[3].set_title('Mask: Filled holes')
+
+  im4 = axes[4].imshow(plots[4], cmap='gray')
+  axes[4].set_title('Mask: Filled holes + Flooded')
+
+  im5 = axes[5].imshow(plots[5], cmap='gray')
+  axes[5].set_title('Mask: Filled holes + Flooded (0.7 threshold) + LineFill')
+  axes[5].set_ylabel('Line nr.')
+  axes[5].set_xlabel('Column nr.')
+
+  fig.colorbar(im0, cax=cax, orientation='vertical')
+  plt.tight_layout()
+  plt.savefig(path_plot)
+  # plt.show()
+  plt.close(fig)
+  return
+
+
 def _create_mask(arr, threshold):
   return np.abs(arr) > threshold
 
@@ -241,40 +276,6 @@ def set_lines_above_to_true_recursive(mask):
   return result_mask
 
 
-def plot_smearing(plots: List[np.ndarray], path_plot: str) -> None:
-  fig = plt.figure(figsize=(15, 8))
-  gs = gridspec.GridSpec(7, 2, width_ratios=[1, 0.1])
-
-  axes = [plt.subplot(gs[i, 0]) for i in range(6)]
-  cax = plt.subplot(gs[:, 1])
-
-  im0 = axes[0].matshow(plots[0], cmap='viridis')
-  axes[0].set_title('Original cross-correlation map')
-
-  im1 = axes[1].matshow(plots[1], cmap='viridis')
-  axes[1].set_title('Interpolated cross-correlation map')
-
-  im2 = axes[2].imshow(plots[2], cmap='gray')
-  axes[2].set_title('Mask: Interpolated cross-correlation map')
-
-  im3 = axes[3].imshow(plots[3], cmap='gray')
-  axes[3].set_title('Mask: Filled holes')
-
-  im4 = axes[4].imshow(plots[4], cmap='gray')
-  axes[4].set_title('Mask: Filled holes + Flooded')
-
-  im5 = axes[5].imshow(plots[5], cmap='gray')
-  axes[5].set_title('Mask: Filled holes + Flooded (0.7 threshold) + LineFill')
-  axes[5].set_ylabel('Line nr.')
-  axes[5].set_xlabel('Column nr.')
-
-  fig.colorbar(im0, cax=cax, orientation='vertical')
-  plt.tight_layout()
-  plt.savefig(path_plot)
-  # plt.show()
-  return
-
-
 def interpolate_nan_2d(arr, min_interp_pts=10):
   """Performs lin. interpolation to replace NaN values in input array along each row.
   Args:
@@ -300,8 +301,9 @@ def flood_smearing(mask: np.ndarray, portion: float) -> np.ndarray:
   """
 
   """
+
   rows, cols = mask.shape
-  win = cols // 5
+  win = cols // 3
   result_array = mask.copy()
 
   for row in range(rows):
@@ -309,15 +311,17 @@ def flood_smearing(mask: np.ndarray, portion: float) -> np.ndarray:
     target_sum = portion * win
 
     condition_met = (window_sum == target_sum)
-
     if any(condition_met):
       start_index = np.argmax(condition_met)
-      result_array[row, start_index:start_index+win] = True
+      # result_array[row, start_index:start_index+win] = True
+      result_array[row, start_index:] = True
 
   return result_array
 
 
-def remove_isolated(mask: np.ndarray[bool], min_size=300) -> np.ndarray[bool]:
+def remove_isolated(mask: np.ndarray[bool],
+                    min_size=300
+                    ) -> np.ndarray[bool]:
   """Filters small areas with True value in the 2D-binary mask
 
   Remove isolated islands of True values in binary mask by finding their
@@ -347,7 +351,12 @@ def remove_isolated(mask: np.ndarray[bool], min_size=300) -> np.ndarray[bool]:
   return mask_uint8 > 0
 
 
-def get_smearing_mask(img: np.ndarray, mask_top_edge: int = 0, path_plot: Optional[str] = None, plot=False) -> Optional[np.ndarray]:
+def get_smearing_mask(
+  img: np.ndarray,
+  mask_top_edge: int = 0,
+  path_plot: Optional[str] = None,
+  plot=False
+) -> Optional[np.ndarray]:
   """Copmutes mask of a distortion appearing at the top of the EM-images.
 
   Estimate the presence and extent of a smearing distortion at the top of the
@@ -362,7 +371,8 @@ def get_smearing_mask(img: np.ndarray, mask_top_edge: int = 0, path_plot: Option
   Returns:
     Mask of smearing distortion with the shape same as the input image
   """
-  kwargs = dict(
+
+  det_args = dict(
     img=img,
     segment_width=1000,
     sigma=1.5,
@@ -370,25 +380,62 @@ def get_smearing_mask(img: np.ndarray, mask_top_edge: int = 0, path_plot: Option
     dy=4
   )
 
-  # Apply the smearing detection
-  smr_map = detect_smearing2d(**kwargs)
+  # Run smearing detection
+  smr_map = detect_smearing2d(**det_args)
   smr_map_interp = interpolate_nan_2d(smr_map)
   smr_map_interp = gaussian(smr_map_interp, sigma=2)
-  mask_smr = create_mask(smr_map_interp, threshold=0.1)
+  mask = create_mask(smr_map_interp, threshold=0.1)
 
-  if mask_top_edge > 0:
-    mask_smr[:mask_top_edge] = True
+  clean_args = dict(
+    mask=mask,
+    min_size=800,
+    portion=1.0,
+    max_vert_extent=150,
+    top=mask_top_edge
+  )
 
-  mask_filled = fill_holes(mask_smr)
-  mask_flooded = flood_pixels(mask_filled, ratio=0.7)  # not used
-  mask_flood = flood_smearing(mask_filled, portion=1.0)
-  mask_flood2 = flood_smearing(mask_flood, portion=.5)
-  mask_final = fill_holes(mask_flood2)
-  mask_final2 = remove_isolated(mask_final, min_size=800)
+  def clean_mask(mask, top, min_size, portion, max_vert_extent):
 
-  if plot:
-    to_plot = [smr_map, smr_map_interp, mask_flood, mask_flood2, mask_final,
-               mask_final2]
-    plot_smearing(plots=to_plot, path_plot=path_plot)
+    # Mask entire top lines
+    if top > 0:
+      mask[:top] = True
+
+    # Mask top right border # TODO investigate if needed
+    mask[:, -1] = True
+
+    # Fill binary holes
+    mask = fill_holes(mask)
+
+    # Unmask all lines below line nr. 'max_vert_extent'
+    if 0 < max_vert_extent < mask.shape[0]:
+      mask[max_vert_extent:] = False
+
+    # Mask small masking irregularities
+    if portion > 0:
+      mask = flood_smearing(mask, portion)
+
+    # Remove True islands with small area
+    if min_size > 0:
+      mask = remove_isolated(mask, min_size)
+
+    return mask
+
+  mask_final2 = clean_mask(**clean_args)
+
+
+  # mask_filled = fill_holes(mask)
+  # # mask_flooded = flood_pixels(mask_filled, ratio=0.4)
+  # # mask_flood = flood_smearing(mask_flooded, portion=1.0)
+  # mask_flood = flood_smearing(mask_filled, portion=1.0)
+  # # mask_flood2 = flood_smearing(mask_flood, portion=.5)
+  # # mask_final = fill_holes(mask_flood2)
+  # mask_final = fill_holes(mask_flood)
+  # mask_final2 = remove_isolated(mask_final, min_size=800)
+
+  # if plot:
+  #   to_plot = [smr_map, smr_map_interp, mask_flood,
+  #              mask_flood, mask_final, mask_final2
+  #              ]
+  #   plot_smearing(plots=to_plot, path_plot=path_plot)
 
   return mask_final2
