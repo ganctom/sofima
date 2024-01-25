@@ -168,12 +168,13 @@ def compute_coarse_offsets(
 
       for overlap in overlaps:
         print(f"ov_size, range_limit: {overlap}, {range_limit}")
+        print(f'mask_y shape: {mask_y.shape}')
         mask_ov = mask[:overlap] if axis == 1 else mask[:, -overlap:]
 
         offset, pr, mask_fin = estimate_fn(overlap, pre, post, range_limit,
                                            filter_size, mask_ov)
         offset[axis] -= overlap
-
+        print(f'mask_y shape: {mask_y.shape}')
         # If a single peak is found, terminate search.
         if pr == 0.0:
           done = True
@@ -219,16 +220,16 @@ def compute_coarse_offsets(
       if not ((x, y) in tile_map and (x + 1, y) in tile_map):
         continue
 
-      print(f'Computing conn_x : {x + 1, y} -> {x, y}')
+      print(f'Computing conn_x : {x, y} -> {x + 1, y}')
       left = tile_map[(x, y)]
       right = tile_map[(x + 1, y)]
-      mask_x = mask_map[(x + 1, y)]
-
+      # mask_x = mask_map[(x + 1, y)]
+      mask_x = np.empty((0,), dtype=bool)
       mask_width = max(overlaps_xy[1])
 
-      if mask_x.size == 0:
-        # dummy mask when left-right masking is disabled
-        mask_x = np.full_like(left, False, dtype=bool)[:, -mask_width:]
+      # if mask_x.size == 0:
+      #   # dummy mask when left-right masking is disabled
+      #   mask_x = np.full_like(left, False, dtype=bool)[:, -mask_width:]
 
       if mask_left_right:
         fn = r"c:\Users\ganctoma\OneDrive - Friedrich Miescher Institute for Biomedical Research\Code\tools\EM_ALIGNMENT\dev\Smearing_masking\to_process\20230523_RoLi_IV_130558_run2_g0001_t0866_s01131\tmp_vert.png"
@@ -258,7 +259,7 @@ def compute_coarse_offsets(
           0,
           mask_x,
       )
-      mask_map[(x + 1, y)] = mask_xx
+      # mask_map[(x + 1, y)] = mask_xx
 
   conn_y = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
   for y in range(0, yx_shape[0] - 1):
@@ -270,6 +271,7 @@ def compute_coarse_offsets(
       top = tile_map[(x, y)]
       bot = tile_map[(x, y + 1)]
       mask_y = mask_map[(x, y + 1)]
+      print(f'mask_y shape: {mask_y.shape}')
 
       # Compute custom smearing mask if not defined or loaded old mask shape
       # would not match all shapes of min_range masks (_estimate_offset)
@@ -285,6 +287,7 @@ def compute_coarse_offsets(
           plot=False
         )
         mask_map[(x, y + 1)] = mask_y
+        print(f'mask_y shape: {mask_y.shape}')
 
       conn_y[:, 0, y, x], mask_yy = _find_offset(
           _estimate_offset_vert,
