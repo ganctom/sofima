@@ -61,7 +61,6 @@ def _estimate_offset(
   # c_mask[:20, 1000:1800] = True
   # c_mask[:, 1800:] = True
   # b_mask |= c_mask
-
   if mask.size != 0:
     b_mask |= mask
 
@@ -102,12 +101,14 @@ def compute_coarse_offsets(
     yx_shape: TileXY,
     tile_map: TileMap,
     mask_map: MaskMap,
+    mask_left_right: bool,
     overlaps_xy=((200, 300), (200, 300)),
     min_range=(10, 100, 0),
     min_overlap=160,
     filter_size=10,
     mask_top_edge=4,
-    max_valid_offset=400
+    max_valid_offset=400,
+    sigma_horiz_pair=1.5
 ) -> tuple[np.ndarray, np.ndarray, MaskMap]:
   """Computes a coarse offset between every neighboring tile pair.
 
@@ -115,6 +116,7 @@ def compute_coarse_offsets(
     yx_shape: vertical and horizontal number of tiles
     tile_map: maps (x, y) tile coordinate to the tile image
     mask_map: maps (x, y) tile coordinate to custom binary mask of tile image
+    mask_left_right: set to True for custom masking horizontal pair overlaps
     overlaps_xy: pair of two overlap sequences to try, for NN tiles in the X and
       Y direction, respectively; these overlaps define the number of pixels in
       the given dimension used to compute the offset vector
@@ -127,6 +129,7 @@ def compute_coarse_offsets(
     filter_size: size of the filter to use when evaluating dynamic range
     mask_top_edge: default number of lines to be masked (from top of the image)
     max_valid_offset: limit valid range of coarse offsets to +- max_valid_offset
+    sigma_horiz_pair: apply Gaussian blurring to left-right tile-pair
 
   Returns:
     two arrays of shape [2, 1] + yx_shape, where the dimensions are:
@@ -165,7 +168,8 @@ def compute_coarse_offsets(
 
       for overlap in overlaps:
         print(f"ov_size, range_limit: {overlap}, {range_limit}")
-        mask_ov = mask[:overlap]
+        mask_ov = mask[:overlap] if axis == 1 else mask[:, -overlap:]
+
         offset, pr, mask_fin = estimate_fn(overlap, pre, post, range_limit,
                                            filter_size, mask_ov)
         offset[axis] -= overlap
@@ -215,10 +219,37 @@ def compute_coarse_offsets(
       if not ((x, y) in tile_map and (x + 1, y) in tile_map):
         continue
 
+      print(f'Computing conn_x : {x + 1, y} -> {x, y}')
       left = tile_map[(x, y)]
       right = tile_map[(x + 1, y)]
-      mask_x = np.empty((0,))  # TODO implement usage of vertical mask
-      conn_x[:, 0, y, x], _ = _find_offset(
+      mask_x = mask_map[(x + 1, y)]
+
+      mask_width = max(overlaps_xy[1])
+
+      if mask_x.size == 0:
+        # dummy mask when left-right masking is disabled
+        mask_x = np.full_like(left, False, dtype=bool)[:, -mask_width:]
+
+      if mask_left_right:
+        fn = r"c:\Users\ganctoma\OneDrive - Friedrich Miescher Institute for Biomedical Research\Code\tools\EM_ALIGNMENT\dev\Smearing_masking\to_process\20230523_RoLi_IV_130558_run2_g0001_t0866_s01131\tmp_vert.png"
+        if mask_x.size == 0 or np.shape(mask_x)[0] < max(overlaps_xy[1]):
+          left_crop = left[:, -mask_width:].transpose()
+          right_crop = right[:, :mask_width].transpose()  # TODO : priority based on acquisition order
+          mask_x = flow_utils.get_smearing_mask(
+            left_crop,
+            mask_top_edge=10,
+            path_plot=fn,
+            plot=False
+          )
+
+          mask_x = mask_x.transpose()
+          mask_map[(x + 1, y)] = mask_x
+
+      if sigma_horiz_pair > 1:
+        right = ndimage.gaussian_filter(right, sigma_horiz_pair)
+        left = ndimage.gaussian_filter(left, sigma_horiz_pair)
+
+      conn_x[:, 0, y, x], mask_xx = _find_offset(
           _estimate_offset_horiz,
           left,
           right,
@@ -227,6 +258,7 @@ def compute_coarse_offsets(
           0,
           mask_x,
       )
+      mask_map[(x + 1, y)] = mask_xx
 
   conn_y = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
   for y in range(0, yx_shape[0] - 1):
@@ -242,8 +274,7 @@ def compute_coarse_offsets(
       # Compute custom smearing mask if not defined or loaded old mask shape
       # would not match all shapes of min_range masks (_estimate_offset)
 
-      fn = (r"c:\Users\ganctoma\OneDrive - Friedrich Miescher Institute for Biomedical Research\Code\tools\EM_ALIGNMENT\dev\Smearing_masking\to_process\20230523_RoLi_IV_130558_run2_g0001_t0866_s01131\tmp.png"
-            )
+      fn = r"c:\Users\ganctoma\OneDrive - Friedrich Miescher Institute for Biomedical Research\Code\tools\EM_ALIGNMENT\dev\Smearing_masking\to_process\20230523_RoLi_IV_130558_run2_g0001_t0866_s01131\tmp.png"
 
       if mask_y.size == 0 or np.shape(mask_y)[0] < max(overlaps_xy[0]):
         bot_crop = bot[:max(overlaps_xy[1])]
