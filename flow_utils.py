@@ -357,7 +357,7 @@ def get_smearing_mask(
   path_plot: Optional[str] = None,
   plot=False
 ) -> Optional[np.ndarray]:
-  """Copmutes mask of a distortion appearing at the top of the EM-images.
+  """Computes mask of a distortion appearing at the top of the EM-images.
 
   Estimate the presence and extent of a smearing distortion at the top of the
   input image and return it as a boolean mask.
@@ -390,7 +390,7 @@ def get_smearing_mask(
     mask=mask,
     min_size=800,
     portion=1.0,
-    max_vert_extent=150,
+    max_vert_extent=450,
     top=mask_top_edge
   )
 
