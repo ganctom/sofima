@@ -22,7 +22,7 @@ dimension represents the XY position of the mesh node at (x, y).
 
 import enum
 import functools as ft
-from typing import Any, Mapping, Sequence, Union
+from typing import Any, Mapping, Sequence, Union, Dict, Optional
 
 from connectomics.common import bounding_box
 import jax
@@ -38,6 +38,7 @@ ShapeXYZ = tuple[int, int, int]
 TileFlow = dict[TileXY, np.ndarray]
 TileOffset = dict[TileXY, Vector]
 TileFlowData = tuple[np.ndarray, TileFlow, TileOffset]
+MaskMap = Dict[TileXY, Optional[np.ndarray]]
 
 
 class NeighborInfo(enum.IntEnum):
@@ -202,6 +203,7 @@ def compute_flow_map(
     patch_size: Vector = (120, 120),
     stride: Vector = (20, 20),
     batch_size: int = 256,
+    tile_masks: Optional[MaskMap] = None
 ) -> tuple[TileFlow, TileOffset]:
   """Computes fine flow between two horizontally or vertically adjacent 2d tiles.
 
@@ -214,6 +216,9 @@ def compute_flow_map(
     patch_size: YX patch size in pixels
     stride: YX stride for the flow map in pixels
     batch_size: number of flow vectors to estimate simultaneously
+    tile_masks: map from (x, y) tile coordinates to map arrays (same shape as
+      tile images); if present, the elements of the mask evaluating to True
+      define the pixels that should be masked during flow computation
 
   Returns:
     tuple of dictionaries:
@@ -263,8 +268,13 @@ def compute_flow_map(
       pre = pre[tuple(pre_sel)]
       post = post[tuple(post_sel)]
 
+      tile_masks = {} if tile_masks is None else tile_masks
+      pre_mask = tile_masks.get((x, y), None)
+      post_mask = tile_masks.get((x + (1 - axis), y + axis), None)
+
       f = mfc.flow_field(
-          pre, post, patch_size=patch_size, step=stride, batch_size=batch_size
+          pre, post, pre_mask=pre_mask, post_mask=post_mask,
+          patch_size=patch_size, step=stride, batch_size=batch_size
       )
       # The inverse flow (post, pre) is just -f, so it does not need to be
       # computed separately.

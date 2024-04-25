@@ -21,24 +21,18 @@ with a Hookean spring to each NN, with the rest spring length determined
 by the estimated offset. This system is relaxed to establish an initial position
 for every tile based on cross-correlation between tile overlaps.
 """
-import time
-from pathlib import Path
-from typing import Mapping, Optional
+
+from typing import Any, Tuple, Union, Mapping, Optional
 
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
-import skimage.io
 from scipy import ndimage
 
 from sofima import flow_field
 from sofima import mesh
-from sofima import flow_utils
 
-from typing import Tuple, List, Set, Union, Optional, Dict, Mapping, Iterable, Any
 TileXY = tuple[int, int]
-TileMap = Mapping[TileXY, np.ndarray]
-MaskMap = dict[TileXY, np.ndarray]
+MaskMap = Mapping[TileXY, np.ndarray]
 Vector = Union[Tuple[int, int], Tuple[int, int, int], Union[Tuple[int], Tuple[Any, ...]]]
 
 
@@ -49,12 +43,8 @@ def _estimate_offset(
     masks: Optional[Tuple[np.ndarray]],
     co: Optional[Vector],
     filter_size: int = 10,
-) -> tuple[list[float], float, np.ndarray[bool]]:
+) -> tuple[list[float], float]:
   """Estimates the global offset vector between images 'a' and 'b'."""
-
-  # plt.imshow(a, cmap='gray')
-  # plt.show()
-
   # Mask areas with insufficient dynamic range.
   a_mask = (
       ndimage.maximum_filter(a, filter_size)
@@ -69,10 +59,6 @@ def _estimate_offset(
   if masks is not None:
     a_mask |= masks[0]
     b_mask |= masks[1]
-
-  # plt.imshow(a_mask, cmap='gray')
-  # plt.show()
-  # return
 
   # Create mask for coarse offset refinement
   if co is not None and np.inf not in co:
@@ -91,7 +77,6 @@ def _estimate_offset(
       if margin > a.shape[1 - axis]:
         margin = 0
 
-      # print(f'Refining offset: {co}')
       a_mask_2[:-(seam_pos + margin)] = True
       b_mask_2[:abs(co[axis]) - margin] = True
 
@@ -100,7 +85,6 @@ def _estimate_offset(
         b_mask_2 = b_mask_2[::-1, :]
 
     else:
-      # print(f'Refining offset: {co}')
       axis = 0
 
       ex = seam_pos + margin
@@ -125,31 +109,15 @@ def _estimate_offset(
         a_mask_2 = a_mask_2[:, :-1]
         b_mask_2 = b_mask_2[:, :-1]
 
-      # a_mask_2[:-1100] = True
-      # b_mask_2[:-1100] = True
       a_mask |= a_mask_2
       b_mask |= b_mask_2
 
-  # a_mask[:-1200] = True
-  # b_mask[:-1200] = True
-
-  # plt.imshow(a_mask, cmap='gray')
-  # p = r"/tungstenfs/scratch/gmicro_sem/gfriedri/tgan/Stack_alignments/Montano_3/20240217/_inspect/tmp/mask_a.jpg"
-  # plt.savefig(p)
-  # # plt.show()
-  # plt.imshow(b_mask, cmap='gray')
-  # p = r"/tungstenfs/scratch/gmicro_sem/gfriedri/tgan/Stack_alignments/Montano_3/20240217/_inspect/tmp/mask_b.jpg"
-  # plt.savefig(p)
-  # # plt.show()
-  # # return
-
-  # Compute coarse-shift vector
   mfc = flow_field.JAXMaskedXCorrWithStatsCalculator()
   xo, yo, _, pr = mfc.flow_field(
       a, b, pre_mask=a_mask, post_mask=b_mask, patch_size=a.shape, step=(1, 1)
   ).squeeze()
 
-  return [xo, yo], abs(pr), b_mask
+  return [xo, yo], abs(pr)
 
 
 def _estimate_offset_horiz(
@@ -160,7 +128,7 @@ def _estimate_offset_horiz(
     filter_size: int,
     masks: Optional[Tuple[np.ndarray]],
     co: Optional[Vector],
-) -> tuple[list[float], float, np.ndarray[bool]]:
+) -> tuple[list[float], float]:
   return _estimate_offset(
       left[:, -overlap:], right[:, :overlap], range_limit, masks, co, filter_size,
   )
@@ -174,30 +142,30 @@ def _estimate_offset_vert(
     filter_size: int,
     masks: Optional[Tuple[np.ndarray]],
     co: Optional[Vector],
-) -> tuple[list[float], float, np.ndarray[bool]]:
+) -> tuple[list[float], float]:
   return _estimate_offset(
       top[-overlap:, :], bot[:overlap, :], range_limit, masks, co, filter_size,
   )
 
+
 def compute_coarse_offsets(
   yx_shape: TileXY,
-  tile_map: TileMap,
+  tile_map: Mapping[TileXY, np.ndarray],
   mask_map: Optional[MaskMap],
   co: Optional[Vector],
   overlaps_xy=((200, 300), (200, 300)),
   min_range=((10, 100, 0), (10, 100, 0)),
   min_overlap=160,
   filter_size=10,
-  mask_top_edge=4,
   max_valid_offset=400,
   sigma_horiz_pair=1.5
-) -> tuple[np.ndarray, np.ndarray, MaskMap]:
+) -> tuple[np.ndarray, np.ndarray]:
   """Computes a coarse offset between every neighboring tile pair.
 
   Args:
     yx_shape: vertical and horizontal number of tiles
     tile_map: maps (x, y) tile coordinate to the tile image
-    mask_map: maps (x, y) tile coordinate to custom binary mask of tile image
+    mask_map: maps (x, y) tile coordinate to the boolean mask of a tile image
     co: optionally, specify approximate coarse offset
     overlaps_xy: pair of two overlap sequences to try, for NN tiles in the X and
       Y direction, respectively; these overlaps define the number of pixels in
@@ -209,7 +177,6 @@ def compute_coarse_offsets(
     min_overlap: minimum overlap required for the estimate to be considered
       valid
     filter_size: size of the filter to use when evaluating dynamic range
-    mask_top_edge: default number of lines to be masked (from top of the image)
     max_valid_offset: limit valid range of coarse offsets to +- max_valid_offset
     sigma_horiz_pair: apply Gaussian blurring to left-right tile-pair
 
@@ -234,23 +201,22 @@ def compute_coarse_offsets(
                    max_ortho_shift, axis, masks, coff):
 
     def _refined_is_valid(
-      orig: Optional[Vector],
-      new: Vector,
+      orig_co: Optional[Vector],
+      new_co: Vector,
       max_shift: int = 20,
     ) -> bool:
 
-      # If original offset is None, we are actually not refining
-      if orig is None:
+      # If original offset is None, refinement is actually disabled
+      if orig_co is None:
         return True
 
       # Check for NaN values in the new offset
-      if np.isnan(new).any():
+      if np.isnan(new_co).any():
         return False
 
       # Calculate differences between new and original offsets
-      xo_o, yo_o = orig
-      xo_n, yo_n = new
-      dx, dy = abs(xo_n - xo_o), abs(yo_n - yo_o)
+      (xo, yo), (xn, yn) = orig_co, new_co
+      dx, dy = abs(xn - xo), abs(yn - yo)
 
       # Check if differences exceed the maximum allowed shift
       return dx <= max_shift and dy <= max_shift
@@ -260,39 +226,33 @@ def compute_coarse_offsets(
         abs(offset[1 - axis]) < max_ortho_shift
         and min_overlap <= abs(offset[axis]) < max_valid_offset
         and pr > pk_ratio
-        and _refined_is_valid(co, offset)
+        and _refined_is_valid(co, offset, max_shift=50)
       )
 
     done = False
-
-    # TODO solve export to plot masks
-    mask_fin = np.full_like(pre, fill_value=False, dtype=np.bool_)
 
     for range_limit in min_range[axis]:
       if done:
         break
       max_idx = -1
       max_pr = 0
-      pk_ratio = 1.01
+      pk_ratio = 1.1
       estimates = []
 
       for overlap in overlaps:
-        # print(f"ov_size, range_limit: {overlap}, {range_limit}")
+        # Mask overlaps if needed
+        ov_masks = None
         if masks is not None:
-          if axis == 0:
-            ma = masks[0][:, -overlap:]
-            mb = masks[1][:, :overlap]
-          else:
-            ma = masks[0][-overlap:, :]
-            mb = masks[1][:overlap, :]
-          _masks = (ma, mb)
-        else:
-          _masks = None
+          ma = masks[0][:, -overlap:] if axis == 0 else masks[0][-overlap:, :]
+          mb = masks[1][:, :overlap] if axis == 0 else masks[1][:overlap, :]
+          # Disable ov masking if overlap region would be completely masked
+          ma = np.full_like(ma, fill_value=False) if np.all(ma) else ma
+          mb = np.full_like(mb, fill_value=False) if np.all(mb) else mb
+          ov_masks = (ma, mb)
 
-        offset, pr, mask_fin = estimate_fn(overlap, pre, post, range_limit,
-                                           filter_size, _masks, coff)
+        offset, pr = estimate_fn(overlap, pre, post, range_limit, filter_size,
+                                 ov_masks, coff)
         offset[axis] -= overlap
-
         # print(f'(sofima fork) offset, pr: {offset, pr}')
 
         # If refining original coarse shift is successful, terminate search
@@ -303,7 +263,6 @@ def compute_coarse_offsets(
         # If a single peak is found, terminate search.
         if pr == 0.0:
           done = True
-          # print('single pk')
           break
 
         estimates.append(offset)
@@ -325,14 +284,13 @@ def compute_coarse_offsets(
           min_idx = i
 
       # If we found an offset with good consistency between two consecutive
-      # estimates, perfer that.
+      # estimates, prefer that.
       if min_diff < 20:
-        # print('preferring min_diff')
         offset = estimates[min_idx + 1]
         done = True
+
       # Otherwise prefer the offset with maximum peak ratio.
       elif max_idx >= 0:
-        # print('preferring max ratio')
         offset = estimates[max_idx]
         done = True
 
@@ -345,41 +303,39 @@ def compute_coarse_offsets(
     if not done or abs(offset[axis]) < min_overlap:
       offset = np.inf, np.inf
 
-    return offset, mask_fin
+    return offset
 
   conn_x = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
-
   for x in range(0, yx_shape[1] - 1):
     for y in range(0, yx_shape[0]):
       if not ((x, y) in tile_map and (x + 1, y) in tile_map):
         continue
 
-      # print(f'Computing conn_x : {x, y} -> {x + 1, y}')
       left = tile_map[(x, y)]
       right = tile_map[(x + 1, y)]
-      ov_width = max(overlaps_xy[0])
 
-      # Load and process custom masks
-      masks = None
+      # Load and crop overlap masks
+      masks_x = None
       if mask_map is not None:
+        ov_width = max(overlaps_xy[0])
         ov_ma = mask_map[(x, y)][:, -ov_width:]
-        ov_mb = mask_map[(x+1, y)][:, :ov_width]
-        masks = (ov_ma, ov_mb)
+        ov_mb = mask_map[(x + 1, y)][:, :ov_width]
+        masks_x = (ov_ma, ov_mb)
 
-      # Blur input image data for better performance
+      # Blur input image data for better xcorr performance
       if sigma_horiz_pair > 1:
         right = ndimage.gaussian_filter(right, sigma_horiz_pair)
         left = ndimage.gaussian_filter(left, sigma_horiz_pair)
 
-      conn_x[:, 0, y, x], mask_xx = _find_offset(
-          _estimate_offset_horiz,
-          left,
-          right,
-          overlaps_xy[0],
-          max(overlaps_xy[1]),
-          0,
-          masks,
-          co
+      conn_x[:, 0, y, x] = _find_offset(
+        _estimate_offset_horiz,
+        left,
+        right,
+        overlaps_xy[0],
+        max(overlaps_xy[1]),
+        0,
+        masks_x,
+        co
       )
 
   conn_y = np.full((2, 1, yx_shape[0], yx_shape[1]), np.nan)
@@ -388,38 +344,36 @@ def compute_coarse_offsets(
       if not ((x, y) in tile_map and (x, y + 1) in tile_map):
         continue
 
-      # print(f'Computing conn_y : {x, y} -> {x, y + 1}')
       top = tile_map[(x, y)]
       bot = tile_map[(x, y + 1)]
-      ov_width = max(overlaps_xy[1])
 
-      # Load and crop custom ov masks
-      masks = None
+      # Load and crop overlap masks
+      masks_y = None
       if mask_map is not None:
-        ov_ma = mask_map[(x, y)][-ov_width:, :]
-        ov_mb = mask_map[(x, y+1)][:ov_width, :]
-        masks = (ov_ma, ov_mb)
+        ov_width = max(overlaps_xy[1])
+        ov_ma = mask_map[(x, y)][-ov_width:]
+        ov_mb = mask_map[(x, y + 1)][:ov_width]
+        masks_y = (ov_ma, ov_mb)
 
-      # Blur input image data for better performance
-      conn_y[:, 0, y, x], mask_yy = _find_offset(
-          _estimate_offset_vert,
-          top,
-          bot,
-          overlaps_xy[1],
-          max(overlaps_xy[0]),
-          1,
-          masks,
-          co
+      conn_y[:, 0, y, x] = _find_offset(
+        _estimate_offset_vert,
+        top,
+        bot,
+        overlaps_xy[1],
+        max(overlaps_xy[0]),
+        1,
+        masks_y,
+        co
       )
 
-  return conn_x, conn_y, mask_map
+  return conn_x, conn_y
 
 
 # TODO(mjanusz): add type aliases for ndarrays
 def interpolate_missing_offsets(
     conn: np.ndarray, axis: int, max_r: int = 4
 ) -> np.ndarray:
-  """Estimates missing coarsse offsets.
+  """Estimates missing coarse offsets.
 
   Missing offsets are indicated by the value 'inf'. This function
   attempts to replace them with finite values from nearest valid
