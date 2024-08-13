@@ -16,7 +16,7 @@
 
 import bisect
 import functools
-from typing import Any
+from typing import Any, Union
 
 from connectomics.common import bounding_box
 from connectomics.volume import subvolume
@@ -57,7 +57,7 @@ class ReconcileCrossBlockMaps(subvolume_processor.SubvolumeProcessor):
       cross_block_inv_volinfo: str,
       last_inv_volinfo: str,
       main_inv_volinfo: str,
-      z_map: dict[int | str, int | str],
+      z_map: dict[Union[int, str], Union[int, str]],
       stride: int,
       xy_overlap: int = 128,
       backward: bool = False,

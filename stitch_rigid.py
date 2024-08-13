@@ -21,7 +21,6 @@ with a Hookean spring to each NN, with the rest spring length determined
 by the estimated offset. This system is relaxed to establish an initial position
 for every tile based on cross-correlation between tile overlaps.
 """
-
 from typing import Any, Tuple, Union, Mapping, Optional
 
 import jax.numpy as jnp
@@ -151,8 +150,8 @@ def _estimate_offset_vert(
 def compute_coarse_offsets(
   yx_shape: TileXY,
   tile_map: Mapping[TileXY, np.ndarray],
-  mask_map: Optional[MaskMap],
-  co: Optional[Vector],
+  mask_map: Optional[MaskMap] = None,
+  co: Optional[Vector] = None,
   overlaps_xy=((200, 300), (200, 300)),
   min_range=((10, 100, 0), (10, 100, 0)),
   min_overlap=160,
@@ -205,7 +204,6 @@ def compute_coarse_offsets(
       new_co: Vector,
       max_shift: int = 20,
     ) -> bool:
-
       # If original offset is None, refinement is actually disabled
       if orig_co is None:
         return True
@@ -221,13 +219,13 @@ def compute_coarse_offsets(
       # Check if differences exceed the maximum allowed shift
       return dx <= max_shift and dy <= max_shift
 
-    def _is_valid_offset(offset, axis, pr):
-      return (
-        abs(offset[1 - axis]) < max_ortho_shift
-        and min_overlap <= abs(offset[axis]) < max_valid_offset
-        and pr > pk_ratio
-        and _refined_is_valid(co, offset, max_shift=50)
-      )
+    def _is_valid_offset(offset, axis, pr_current):
+      c1 = abs(offset[1 - axis]) < max_ortho_shift
+      c2 = min_overlap <= abs(offset[axis]) < max_valid_offset
+      c3 = pr_current > pk_ratio
+      c4 = _refined_is_valid(co, offset, max_shift=50)
+      is_valid = c1 and c2 and c3 and c4
+      return is_valid
 
     done = False
 
@@ -365,7 +363,6 @@ def compute_coarse_offsets(
         masks_y,
         co
       )
-
   return conn_x, conn_y
 
 
