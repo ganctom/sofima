@@ -157,7 +157,6 @@ def compute_coarse_offsets(
   min_overlap=160,
   filter_size=10,
   max_valid_offset=400,
-  sigma_horiz_pair=1.5
 ) -> tuple[np.ndarray, np.ndarray]:
   """Computes a coarse offset between every neighboring tile pair.
 
@@ -177,7 +176,6 @@ def compute_coarse_offsets(
       valid
     filter_size: size of the filter to use when evaluating dynamic range
     max_valid_offset: limit valid range of coarse offsets to +- max_valid_offset
-    sigma_horiz_pair: apply Gaussian blurring to left-right tile-pair
 
   Returns:
     two arrays of shape [2, 1] + yx_shape, where the dimensions are:
@@ -319,11 +317,6 @@ def compute_coarse_offsets(
         ov_ma = mask_map[(x, y)][:, -ov_width:]
         ov_mb = mask_map[(x + 1, y)][:, :ov_width]
         masks_x = (ov_ma, ov_mb)
-
-      # Blur input image data for better xcorr performance
-      if sigma_horiz_pair > 1:
-        right = ndimage.gaussian_filter(right, sigma_horiz_pair)
-        left = ndimage.gaussian_filter(left, sigma_horiz_pair)
 
       conn_x[:, 0, y, x] = _find_offset(
         _estimate_offset_horiz,
